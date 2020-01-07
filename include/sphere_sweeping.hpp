@@ -39,7 +39,7 @@ private:
     std::vector<float> depth_candidates;
     CameraModel *caml, *camr; // camera model for both left and right cameras
 
-    void initialiseDepthCandidates(const sensor_msgs::ImageConstPtr l_image_msg, const sensor_msgs::ImageConstPtr r_image_msg);
+    void initialiseDepthCandidates(const sensor_msgs::CameraInfoConstPtr l_info_msg, const sensor_msgs::CameraInfoConstPtr r_info_msg);
 
     void imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg,
 								const sensor_msgs::ImageConstPtr r_image_msg,
