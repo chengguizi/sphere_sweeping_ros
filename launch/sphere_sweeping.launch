@@ -1,0 +1,3 @@
+<launch>
+    <node pkg="sphere_sweeping_ros" type="sphere_sweeping_ros" name="sphere_sweeping" output="screen"/>
+</launch>
