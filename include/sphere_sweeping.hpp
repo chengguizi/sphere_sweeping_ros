@@ -11,6 +11,10 @@
 #include <stereo_processor.h>
 #include <iostream>
 
+#include <vector>
+
+class CameraModel;
+
 
 class SphereSweeping : public StereoProcessor{
     
@@ -19,7 +23,7 @@ public:
         "/tiscamera_ros/left/image_rect_raw",
         "/tiscamera_ros/right/image_rect_raw",
         "/tiscamera_ros/left/camera_info",
-        "/tiscamera_ros/right/camera_info")
+        "/tiscamera_ros/right/camera_info"), initialised(false)
     {
 
     }
@@ -30,6 +34,12 @@ public:
     }
 
 private:
+
+    bool initialised;
+    std::vector<float> depth_candidates;
+    CameraModel *caml, *camr; // camera model for both left and right cameras
+
+    void initialiseDepthCandidates(const sensor_msgs::ImageConstPtr l_image_msg, const sensor_msgs::ImageConstPtr r_image_msg);
 
     void imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg,
 								const sensor_msgs::ImageConstPtr r_image_msg,
