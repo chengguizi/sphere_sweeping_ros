@@ -17,6 +17,34 @@
 #include <aslam/cameras/DoubleSphereProjection.hpp>
 #include <aslam/cameras/NoDistortion.hpp>
 
+#include <algorithm>
+#include <numeric> 
+
+template <typename T>
+std::vector<size_t> sort_indexes(const std::array<T, SphereSweeping::depthN> &v) {
+
+  // initialize original index locations
+  std::vector<size_t> idx(SphereSweeping::depthN);
+  std::iota(idx.begin(), idx.end(), 0);
+
+  // sort indexes based on comparing values in v
+  std::sort(idx.begin(), idx.end(),
+       [&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
+
+  return idx;
+}
+
+template <typename T>
+std::ostream& operator<< (std::ostream& out, const std::vector<T>& v) {
+  if ( !v.empty() ) {
+    out << '[';
+    std::copy (v.begin(), v.end(), std::ostream_iterator<T>(out, ", "));
+    out << "\b\b]";
+  }
+  return out;
+}
+
+
 class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
 
 public:
@@ -28,7 +56,30 @@ public:
 
 SphereSweeping::KernelType SphereSweeping::squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img)
 {
-	return KernelType();
+	KernelType kernel;
+
+	constexpr int HALF_SIZE = KERNEL_SIZE / 2;
+	const float anchor_x = pt.x - HALF_SIZE;
+	const float anchor_y = pt.y - HALF_SIZE;
+	for (int i = 0; i < KERNEL_SIZE; i++)
+	{
+		for (int j = 0; j < KERNEL_SIZE; j++)
+		{
+			int x = i + anchor_x;
+			int y = j + anchor_y;
+			// check for bound
+			if (x < 0 || x >= img.cols || y < 0 || y >= img.rows)
+				kernel(i,j) = 0;
+			else
+			{
+				// at<>(row, col)
+				kernel(i,j) = img.at<unsigned char>(cv::Point(x,y));
+			}
+			
+		}
+	}
+
+	return kernel;
 }
 
 
@@ -61,63 +112,68 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 	detector->detect(cv_leftImg_source, keys);
 	std::cout << "FAST feature no. = " << keys.size() << std::endl;
 
+	cost_map.resize(keys.size());
+
 	assert(caml != nullptr && camr != nullptr);
 
 	#ifdef USE_NAIVE
 	CostMapType::iterator cost = cost_map.begin();
 
-	for (auto& depth : depth_candidates){
+	for (auto& key : keys){
 
-		(*cost).resize(keys.size());
+		
 
-		for (size_t idx = 0; idx < keys.size(); idx++){
-			auto& key = keys[idx];
+		for (size_t idx = 0; idx < depthN; idx++){
+
 			KernelType kernel_left = squareKernelImagePlane(key.pt, cv_leftImg_source);
 
 			// Use of template argument deduction 
 			Eigen::Vector3d point_caml, point_camr;
 			caml->keypointToEuclidean(Eigen::Vector2d(key.pt.x, key.pt.y), point_caml);
 
-			std::cout << point_caml.transpose() << std::endl;
+			// std::cout << point_caml.transpose() << std::endl;
 
 			// Perform basis transformation from left camera to right camera
-			point_camr = point_caml;
+			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
 			Eigen::Vector2d right_point;
 			caml->euclideanToKeypoint(point_camr, right_point);
 
 			KernelType kernel_right = squareKernelImagePlane(cv::Point2f(right_point[0], right_point[1]), cv_rightImg_source);
 
 			// Frobenius norm
-			(*cost)[idx] = (kernel_right - kernel_left).norm();
+			(*cost)[idx] = (kernel_right - kernel_left).norm() / (KERNEL_SIZE * KERNEL_SIZE);
 
-			// std::cout  << "done " << (*cost)[idx] << std::endl;
+			// std::cout  << " " << (*cost)[idx];
 			
 		}
+
+		auto sorted_idx = sort_indexes<double>((*cost));
+
+		key.response = depth_candidates[sorted_idx[0]];
+		// std::partial_sort((*cost).begin(), (*cost).begin()+1, (*cost).end());
+
+		// std::cout  << std::endl << sorted_idx;
+
 		cost++;
+		// std::cout  << "done " << std::endl;
 	}
+
 	
 	#endif
+
+	// Updated cost_map
+
+	// for ()
 
 	showDebugImage("Left", cv_leftImg_source);
 	
 
 }
 
-struct DSParameters{
-		double xi;
-		double alpha;
-		double focalLengthU;
-		double focalLengthV;
-		double imageCenterU;
-		double imageCenterV;
-		int resolutionU;
-		int resolutionV;
-		Eigen::Affine3d T_cn_cnm1 = Eigen::Affine3d::Identity();
-};
 
 
 
-void cameraInfo2DSParam(const sensor_msgs::CameraInfoConstPtr info, DSParameters& param)
+void cameraInfo2DSParam(const sensor_msgs::CameraInfoConstPtr info, SphereSweeping::DSParameters& param)
 {
 	// Intrinsics are stored in the K matrix
 	param.xi = info->K[0];
@@ -149,7 +205,7 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 
 
 	// Initialised Camera Models
-	DSParameters pl, pr;
+	
 	
 	cameraInfo2DSParam(l_info_msg, pl);
 	cameraInfo2DSParam(r_info_msg, pr);

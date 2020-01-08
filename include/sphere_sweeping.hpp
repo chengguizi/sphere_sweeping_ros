@@ -24,6 +24,17 @@ class CameraModel;
 class SphereSweeping : public StereoProcessor{
     
 public:
+    struct DSParameters{
+                double xi;
+                double alpha;
+                double focalLengthU;
+                double focalLengthV;
+                double imageCenterU;
+                double imageCenterV;
+                int resolutionU;
+                int resolutionV;
+                Eigen::Affine3d T_cn_cnm1 = Eigen::Affine3d::Identity();
+        };
     SphereSweeping() : StereoProcessor(3,
         "/tiscamera_ros/left/image_rect_raw",
         "/tiscamera_ros/right/image_rect_raw",
@@ -38,26 +49,32 @@ public:
         std::cout << "~SphereSweeping()" << std::endl;
     }
 
+    static constexpr int KERNEL_SIZE = 7;
+    static constexpr int depthN = 20;
+
 private:
 
     bool initialised;
     bool visualisation = true;
 
-    static constexpr int KERNEL_SIZE = 7;
+    
     typedef Eigen::Matrix<float, KERNEL_SIZE, KERNEL_SIZE> KernelType;
 
-    static constexpr int depthN = 20;
+    
     std::array<double, depthN> depth_candidates;
 
     // store the list of keypoints detected
     std::vector<cv::KeyPoint> keys;
     
-    typedef std::array<std::vector<double>, depthN> CostMapType;
+    typedef std::vector<std::array<double, depthN>> CostMapType;
     // each entry is a vector of all points' cost for one particular depth candidates
     // index is the same as keys.
     CostMapType cost_map;
 
     CameraModel *caml, *camr; // camera model for both left and right cameras
+    
+
+    DSParameters pl, pr;
 
     void initialiseDepthCandidates(const sensor_msgs::CameraInfoConstPtr l_info_msg, const sensor_msgs::CameraInfoConstPtr r_info_msg);
 
