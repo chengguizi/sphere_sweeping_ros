@@ -50,7 +50,7 @@ public:
     }
 
     static constexpr int KERNEL_SIZE = 7;
-    static constexpr int depthN = 20;
+    static constexpr int depthN = 50;
 
 private:
 

@@ -105,7 +105,7 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 
 
 	// Fast detector
-	const int fast_th = 20;
+	const int fast_th = 30;
 	auto detector = cv::FastFeatureDetector::create(fast_th,true,cv::FastFeatureDetector::TYPE_9_16);
 
 	// detect FAST features into the class keys variable
@@ -215,7 +215,7 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 	// Initialise all depth candidates, based on unit pixel disparity between adjacent spheres
 	int N = depth_candidates.size();
 	for(int i = 1; i <= N; i++){
-		Eigen::Vector2d keyPoint(pr.imageCenterU - i ,0);
+		Eigen::Vector2d keyPoint(pr.imageCenterU - i ,pr.imageCenterV);
 		Eigen::Vector3d outPoint;
 		camr->keypointToEuclidean(keyPoint,outPoint);
 		depth_candidates[i-1] = outPoint[2]/outPoint[0] * pr.T_cn_cnm1(0,3);
@@ -232,11 +232,25 @@ inline void SphereSweeping::showDebugImage(const std::string title, const cv::Ma
 		return;
 	
 	cv::Mat outImg;
-
 	if (img.type() != CV_8UC3)
 		cv::cvtColor(img, outImg, CV_GRAY2BGR);
 	else 
 		outImg = img;
+
+	cv::Mat keysMat;
+	cv::Mat colorCoding;
+	for(auto & key:keys){
+		keysMat.push_back(1.0/key.response);
+	}
+	double min = 1.0/depth_candidates[0], max = 1.0/depth_candidates[depthN-1];
+	keysMat.convertTo(keysMat,CV_8UC3, 255 / (max-min), -min);
+	cv::applyColorMap(keysMat,colorCoding,cv::COLORMAP_HOT);
+	int color_index = 0;
+	for(auto & key:keys){
+		rectangle(outImg, cv::Point(key.pt.x-KERNEL_SIZE/2,key.pt.y-KERNEL_SIZE/2), cv::Point(key.pt.x+KERNEL_SIZE/2,key.pt.y+KERNEL_SIZE/2), colorCoding.at<cv::Vec3b>(cv::Point(0, color_index)), -1);
+		color_index++;
+	}
+	cv::resize(outImg, outImg, cv::Size(), 0.5, 0.5);
 	cv::imshow(title, outImg);
 	cv::waitKey(1);
 }
