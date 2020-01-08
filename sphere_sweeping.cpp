@@ -18,7 +18,9 @@
 #include <aslam/cameras/DoubleSphereProjection.hpp>
 #include <aslam/cameras/NoDistortion.hpp>
 
-class CameraModel : aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
+using namespace std;
+using namespace Eigen;
+class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
 
 public:
 	CameraModel(double xi, double alpha, double focalLengthU, double focalLengthV,
@@ -81,11 +83,32 @@ struct DSParameters{
 		double imageCenterV;
 		int resolutionU;
 		int resolutionV;
+		Eigen::Affine3d T_cn_cnm1 = Eigen::Affine3d::Identity();
 };
+
+
 
 void cameraInfo2DSParam(const sensor_msgs::CameraInfoConstPtr info, DSParameters& param)
 {
 	// Intrinsics are stored in the K matrix
+	param.xi = info->K[0];
+	param.alpha = info->K[1];
+	param.focalLengthU = info->K[2];
+	param.focalLengthV = info->K[3];
+	param.imageCenterU = info->K[4];
+	param.imageCenterV = info->K[5];
+	param.resolutionU = info->width;
+	param.resolutionV = info->height;
+	if(info->P[11]){
+		param.T_cn_cnm1(0,0) = info->P[0]; param.T_cn_cnm1(0,1) = info->P[1]; param.T_cn_cnm1(0,2) = info->P[2]; param.T_cn_cnm1(0,3) = info->P[3];
+		param.T_cn_cnm1(1,0) = info->P[4]; param.T_cn_cnm1(1,1) = info->P[5]; param.T_cn_cnm1(1,2) = info->P[6]; param.T_cn_cnm1(1,3) = info->P[7];
+		param.T_cn_cnm1(2,0) = info->P[8]; param.T_cn_cnm1(2,1) = info->P[9]; param.T_cn_cnm1(2,2) = info->P[10]; param.T_cn_cnm1(2,3) = info->P[11];
+	}
+	cout<<"camera_parameters: "<<endl;
+	cout<<param.xi<<", "<<param.alpha<<", "<<param.focalLengthU<<", "<<param.focalLengthV<<", "
+	<<param.imageCenterU<<", "<<param.imageCenterV<<", "<<param.resolutionU<<", "<<param.resolutionV<<endl;
+	cout<<"T_cn_cm1: "<<endl;
+	cout<<param.T_cn_cnm1.matrix()<<endl;
 }
 
 void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoConstPtr l_info_msg,
@@ -97,16 +120,12 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 
 	// Initialised Camera Models
 	DSParameters pl, pr;
+	
 	cameraInfo2DSParam(l_info_msg, pl);
 	cameraInfo2DSParam(r_info_msg, pr);
 
 	caml = new CameraModel(pl.xi, pl.alpha, pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.resolutionU, pl.resolutionV);
 	camr = new CameraModel(pr.xi, pr.alpha, pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.resolutionU, pr.resolutionV);
-
-	//   DoubleSphereProjection(double xi, double alpha, double focalLengthU, double focalLengthV,
-    //              double imageCenterU, double imageCenterV, int resolutionU,
-    //              int resolutionV);
-
 	// Initialise all depth candidates, based on unit pixel disparity between adjacent spheres
 	constexpr int N = 20;
 	depth_candidates.resize(N);
