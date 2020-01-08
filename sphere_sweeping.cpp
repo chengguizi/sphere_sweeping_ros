@@ -11,15 +11,12 @@
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
 
-#include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
 
 #include <aslam/cameras/OmniProjection.hpp>
 #include <aslam/cameras/DoubleSphereProjection.hpp>
 #include <aslam/cameras/NoDistortion.hpp>
 
-using namespace std;
-using namespace Eigen;
 class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
 
 public:
@@ -28,6 +25,12 @@ public:
                  int resolutionV) : 
 				 DoubleSphereProjection(xi,alpha,focalLengthU,focalLengthV,imageCenterU,imageCenterV,resolutionU,resolutionV){}
 };
+
+SphereSweeping::KernelType SphereSweeping::squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img)
+{
+	return KernelType();
+}
+
 
 void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg,
 								const sensor_msgs::ImageConstPtr r_image_msg,
@@ -49,27 +52,53 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 	cv::Mat cv_leftImg_source = cvImage_l->image;
 	cv::Mat cv_rightImg_source = cvImage_r->image;
 
-	cv::Mat cv_leftImg_8uc1, cv_rightImg_8uc1;
-	
-	// cv_leftImg_source.convertTo(cv_leftImg_8uc1, CV_RGB, 0.00390625);
-	// cv_rightImg_source.convertTo(cv_rightImg_8uc1, CV_RGB, 0.00390625);
-
-	// std::cout << "size" << cv_leftImg_8uc1.cols << "," << cv_leftImg_8uc1.rows << std::endl;
 
 	// Fast detector
 	const int fast_th = 20;
 	auto detector = cv::FastFeatureDetector::create(fast_th,true,cv::FastFeatureDetector::TYPE_9_16);
 
-	std::vector< cv::KeyPoint > keysl;
+	// detect FAST features into the class keys variable
+	detector->detect(cv_leftImg_source, keys);
+	std::cout << "FAST feature no. = " << keys.size() << std::endl;
 
+	assert(caml != nullptr && camr != nullptr);
+
+	#ifdef USE_NAIVE
+	CostMapType::iterator cost = cost_map.begin();
+
+	for (auto& depth : depth_candidates){
+
+		(*cost).resize(keys.size());
+
+		for (size_t idx = 0; idx < keys.size(); idx++){
+			auto& key = keys[idx];
+			KernelType kernel_left = squareKernelImagePlane(key.pt, cv_leftImg_source);
+
+			// Use of template argument deduction 
+			Eigen::Vector3d point_caml, point_camr;
+			caml->keypointToEuclidean(Eigen::Vector2d(key.pt.x, key.pt.y), point_caml);
+
+			std::cout << point_caml.transpose() << std::endl;
+
+			// Perform basis transformation from left camera to right camera
+			point_camr = point_caml;
+			Eigen::Vector2d right_point;
+			caml->euclideanToKeypoint(point_camr, right_point);
+
+			KernelType kernel_right = squareKernelImagePlane(cv::Point2f(right_point[0], right_point[1]), cv_rightImg_source);
+
+			// Frobenius norm
+			(*cost)[idx] = (kernel_right - kernel_left).norm();
+
+			// std::cout  << "done " << (*cost)[idx] << std::endl;
+			
+		}
+		cost++;
+	}
 	
+	#endif
 
-	detector->detect(cv_leftImg_source, keysl);
-
-	// std::cout << "FAST feature no. = " << keysl.size() << std::endl;
-
-	// cv::imshow("Left", cv_leftImg_source);
-	// cv::waitKey(1);
+	showDebugImage("Left", cv_leftImg_source);
 	
 
 }
@@ -104,18 +133,19 @@ void cameraInfo2DSParam(const sensor_msgs::CameraInfoConstPtr info, DSParameters
 		param.T_cn_cnm1(1,0) = info->P[4]; param.T_cn_cnm1(1,1) = info->P[5]; param.T_cn_cnm1(1,2) = info->P[6]; param.T_cn_cnm1(1,3) = info->P[7];
 		param.T_cn_cnm1(2,0) = info->P[8]; param.T_cn_cnm1(2,1) = info->P[9]; param.T_cn_cnm1(2,2) = info->P[10]; param.T_cn_cnm1(2,3) = info->P[11];
 	}
-	cout<<"camera_parameters: "<<endl;
-	cout<<param.xi<<", "<<param.alpha<<", "<<param.focalLengthU<<", "<<param.focalLengthV<<", "
-	<<param.imageCenterU<<", "<<param.imageCenterV<<", "<<param.resolutionU<<", "<<param.resolutionV<<endl;
-	cout<<"T_cn_cm1: "<<endl;
-	cout<<param.T_cn_cnm1.matrix()<<endl;
+	std::cout<<"camera_parameters: "<<std::endl;
+	std::cout<<param.xi<<", "<<param.alpha<<", "<<param.focalLengthU<<", "<<param.focalLengthV<<", "
+	<<param.imageCenterU<<", "<<param.imageCenterV<<", "<<param.resolutionU<<", "<<param.resolutionV<<std::endl;
+	std::cout<<"T_cn_cm1: "<<std::endl;
+	std::cout<<param.T_cn_cnm1.matrix()<<std::endl;
 }
 
 void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoConstPtr l_info_msg,
 								const sensor_msgs::CameraInfoConstPtr r_info_msg)
 {	
 
-	cv::namedWindow("Left", cv::WINDOW_AUTOSIZE);
+	if (visualisation)
+		cv::namedWindow("Left", cv::WINDOW_AUTOSIZE);
 
 
 	// Initialised Camera Models
@@ -127,9 +157,22 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 	caml = new CameraModel(pl.xi, pl.alpha, pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.resolutionU, pl.resolutionV);
 	camr = new CameraModel(pr.xi, pr.alpha, pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.resolutionU, pr.resolutionV);
 	// Initialise all depth candidates, based on unit pixel disparity between adjacent spheres
-	constexpr int N = 20;
-	depth_candidates.resize(N);
 
 	cv::waitKey(1);
 	initialised = true;
+}
+
+inline void SphereSweeping::showDebugImage(const std::string title, const cv::Mat img)
+{
+	if (!visualisation)
+		return;
+	
+	cv::Mat outImg;
+
+	if (img.type() != CV_8UC3)
+		cv::cvtColor(img, outImg, CV_GRAY2BGR);
+	else 
+		outImg = img;
+	cv::imshow(title, outImg);
+	cv::waitKey(1);
 }
