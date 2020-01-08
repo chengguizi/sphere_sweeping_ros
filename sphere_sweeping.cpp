@@ -157,6 +157,14 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 	caml = new CameraModel(pl.xi, pl.alpha, pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.resolutionU, pl.resolutionV);
 	camr = new CameraModel(pr.xi, pr.alpha, pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.resolutionU, pr.resolutionV);
 	// Initialise all depth candidates, based on unit pixel disparity between adjacent spheres
+	int N = depth_candidates.size();
+	for(int i = 1; i <= N; i++){
+		Eigen::Vector2d keyPoint(pr.imageCenterU - i ,0);
+		Eigen::Vector3d outPoint;
+		camr->keypointToEuclidean(keyPoint,outPoint);
+		depth_candidates[i-1] = outPoint[2]/outPoint[0] * pr.T_cn_cnm1(0,3);
+		std::cout<<"depth"<<i<<": "<< depth_candidates[i-1]<< std::endl;
+	}
 
 	cv::waitKey(1);
 	initialised = true;
