@@ -21,17 +21,22 @@
 #include <numeric> 
 
 template <typename T>
-std::vector<size_t> sort_indexes(const std::array<T, SphereSweeping::depthN> &v) {
+std::vector<size_t> sort_indexes(const std::array<T, SphereSweeping::depthN> &v, int partialN = -1) {
 
-  // initialize original index locations
-  std::vector<size_t> idx(SphereSweeping::depthN);
-  std::iota(idx.begin(), idx.end(), 0);
+	// initialize original index locations
+	std::vector<size_t> idx(SphereSweeping::depthN);
+	std::iota(idx.begin(), idx.end(), 0);
 
-  // sort indexes based on comparing values in v
-  std::sort(idx.begin(), idx.end(),
-       [&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
+	// sort indexes based on comparing values in v
 
-  return idx;
+	if (partialN < 0)
+  		std::sort(idx.begin(), idx.end(),
+       		[&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
+	else{
+		std::partial_sort(idx.begin(), idx.begin() + partialN, idx.end(), [&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
+	}
+
+  	return idx;
 }
 
 template <typename T>
@@ -45,6 +50,20 @@ std::ostream& operator<< (std::ostream& out, const std::vector<T>& v) {
 }
 
 
+void imshow(const std::string title, const cv::Mat img, int wait = 0)
+{
+	
+	cv::Mat outImg;
+
+	if (img.type() == CV_8UC1)
+		cv::cvtColor(img, outImg, CV_GRAY2BGR);
+	else 
+		outImg = img;
+	cv::imshow(title, outImg);
+	cv::waitKey(wait);
+}
+
+
 class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
 
 public:
@@ -54,9 +73,9 @@ public:
 				 DoubleSphereProjection(xi,alpha,focalLengthU,focalLengthV,imageCenterU,imageCenterV,resolutionU,resolutionV){}
 };
 
-SphereSweeping::KernelType SphereSweeping::squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img)
+cv::Mat SphereSweeping::squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img)
 {
-	KernelType kernel;
+	cv::Mat kernel(cv::Size(KERNEL_SIZE,KERNEL_SIZE), CV_8UC1); //
 
 	constexpr int HALF_SIZE = KERNEL_SIZE / 2;
 	const float anchor_x = pt.x - HALF_SIZE;
@@ -69,11 +88,11 @@ SphereSweeping::KernelType SphereSweeping::squareKernelImagePlane(const cv::Poin
 			int y = j + anchor_y;
 			// check for bound
 			if (x < 0 || x >= img.cols || y < 0 || y >= img.rows)
-				kernel(i,j) = 0;
+				kernel.at<unsigned char>(i,j) = 0;
 			else
 			{
 				// at<>(row, col)
-				kernel(i,j) = img.at<unsigned char>(cv::Point(x,y));
+				kernel.at<unsigned char>(i,j) = img.at<unsigned char>(cv::Point(x,y));
 			}
 			
 		}
@@ -119,42 +138,79 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 	#ifdef USE_NAIVE
 	CostMapType::iterator cost = cost_map.begin();
 
-	for (auto& key : keys){
+	int num_removed = 0;
+
+	for (auto key = keys.begin(); key != keys.end();){
 
 		
 
+		cv::Mat kernel_left = squareKernelImagePlane(key->pt, cv_leftImg_source);
+
+		// cv::Mat debugImg = kernel_left;
+
+		double avg_cost = 0;
+
 		for (size_t idx = 0; idx < depthN; idx++){
 
-			KernelType kernel_left = squareKernelImagePlane(key.pt, cv_leftImg_source);
+			
 
 			// Use of template argument deduction 
 			Eigen::Vector3d point_caml, point_camr;
-			caml->keypointToEuclidean(Eigen::Vector2d(key.pt.x, key.pt.y), point_caml);
+			caml->keypointToEuclidean(Eigen::Vector2d(key->pt.x, key->pt.y), point_caml);
 
-			// std::cout << point_caml.transpose() << std::endl;
+			// std::cout << depth_candidates[idx] << std::endl;
+
+			// std::cout << "left  point: "<< Eigen::Vector2d(key.pt.x, key.pt.y).transpose() << std::endl;
 
 			// Perform basis transformation from left camera to right camera
 			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
 			Eigen::Vector2d right_point;
 			caml->euclideanToKeypoint(point_camr, right_point);
 
-			KernelType kernel_right = squareKernelImagePlane(cv::Point2f(right_point[0], right_point[1]), cv_rightImg_source);
+			// std::cout << "right point: " << right_point.transpose() << std::endl;
+
+			cv::Mat kernel_right = squareKernelImagePlane(cv::Point2f(right_point[0], right_point[1]), cv_rightImg_source);
 
 			// Frobenius norm
-			(*cost)[idx] = (kernel_right - kernel_left).norm() / (KERNEL_SIZE * KERNEL_SIZE);
+			(*cost)[idx] = cv::norm(kernel_right,kernel_left) / (KERNEL_SIZE * KERNEL_SIZE);
 
+			avg_cost += (*cost)[idx];
 			// std::cout  << " " << (*cost)[idx];
+
+			// cv::hconcat(debugImg, kernel_right, debugImg);
+			
 			
 		}
 
-		auto sorted_idx = sort_indexes<double>((*cost));
+		auto sorted_idx = sort_indexes<double>((*cost), 2);
 
-		key.response = depth_candidates[sorted_idx[0]];
+		key->response = depth_candidates[sorted_idx[0]];
+
+		
+		// Determine if the optimal depth is bad
+		
+		avg_cost /= depthN;
+
+		if ((*cost)[sorted_idx[0]] > avg_cost * 0.8 || (*cost)[sorted_idx[0]] > 25)
+		{
+			key = keys.erase(key);
+			cost = cost_map.erase(cost);
+			num_removed++;
+		}
+		else
+		{
+			cost++;
+			key++;
+		}
+		
+
+		// imshow("results", debugImg, 500);
+
 		// std::partial_sort((*cost).begin(), (*cost).begin()+1, (*cost).end());
 
 		// std::cout  << std::endl << sorted_idx;
 
-		cost++;
+		
 		// std::cout  << "done " << std::endl;
 	}
 
@@ -165,7 +221,17 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 
 	// for ()
 
+	cv::Mat right_epipolar = cv_rightImg_source.clone();
+
+	std::vector<cv::Point2f> pts;
+	pts.push_back(cv::Point2f(pr.imageCenterU, pr.imageCenterV));
+	// drawEpipolarCurve(right_epipolar, pts);
+
 	showDebugImage("Left", cv_leftImg_source);
+
+	// showDebugImage("Right Epi", right_epipolar);
+
+	std::cout << "removed " << num_removed << std::endl;
 	
 
 }
@@ -226,6 +292,22 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 	initialised = true;
 }
 
+void SphereSweeping::drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::Point2f> pts)
+{
+	for (size_t idx = 0; idx < depthN; idx++)
+	{
+		for (auto& pt : pts)
+		{
+			Eigen::Vector3d point_caml, point_camr;
+			caml->keypointToEuclidean(Eigen::Vector2d(pt.x, pt.y), point_caml);
+			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
+			Eigen::Vector2d right_point;
+			caml->euclideanToKeypoint(point_camr, right_point);
+		}
+		
+	}
+}
+
 inline void SphereSweeping::showDebugImage(const std::string title, const cv::Mat img)
 {
 	if (!visualisation)
@@ -243,7 +325,8 @@ inline void SphereSweeping::showDebugImage(const std::string title, const cv::Ma
 		keysMat.push_back(1.0/key.response);
 	}
 	double min = 1.0/depth_candidates[0], max = 1.0/depth_candidates[depthN-1];
-	keysMat.convertTo(keysMat,CV_8UC3, 255 / (max-min), -min);
+	double k = 255 / (max-min);
+	keysMat.convertTo(keysMat,CV_8UC3, k , -k*min);
 	cv::applyColorMap(keysMat,colorCoding,cv::COLORMAP_HOT);
 	int color_index = 0;
 	for(auto & key:keys){

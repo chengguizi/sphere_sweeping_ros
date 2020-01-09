@@ -21,6 +21,11 @@
 class CameraModel;
 
 
+// class DoubleSphereEpipolar{
+
+// }
+
+
 class SphereSweeping : public StereoProcessor{
     
 public:
@@ -49,8 +54,9 @@ public:
         std::cout << "~SphereSweeping()" << std::endl;
     }
 
-    static constexpr int KERNEL_SIZE = 7;
-    static constexpr int depthN = 50;
+    static constexpr int KERNEL_SIZE = 9;
+    static constexpr int depthN = 60;
+
 
 private:
 
@@ -58,7 +64,7 @@ private:
     bool visualisation = true;
 
     
-    typedef Eigen::Matrix<float, KERNEL_SIZE, KERNEL_SIZE> KernelType;
+    // typedef Eigen::Matrix<float, KERNEL_SIZE, KERNEL_SIZE> KernelType;
 
     
     std::array<double, depthN> depth_candidates;
@@ -79,12 +85,17 @@ private:
     void initialiseDepthCandidates(const sensor_msgs::CameraInfoConstPtr l_info_msg, const sensor_msgs::CameraInfoConstPtr r_info_msg);
 
     // Extract a square kernel, around a image plane point
-    KernelType squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img);
+    cv::Mat squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img);
 
     void imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg,
 								const sensor_msgs::ImageConstPtr r_image_msg,
 								const sensor_msgs::CameraInfoConstPtr l_info_msg,
 								const sensor_msgs::CameraInfoConstPtr r_info_msg);
+
+
+    // Debug functions
+
+    void drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::Point2f> pts);
 
     void showDebugImage(const std::string title, const cv::Mat img);
 };
