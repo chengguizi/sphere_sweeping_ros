@@ -134,11 +134,12 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 	cost_map.resize(keys.size());
 
 	assert(caml != nullptr && camr != nullptr);
-
+	int num_removed = 0;
+	
 	#ifdef USE_NAIVE
 	CostMapType::iterator cost = cost_map.begin();
 
-	int num_removed = 0;
+	
 
 	for (auto key = keys.begin(); key != keys.end();){
 
@@ -148,7 +149,7 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 
 		// cv::Mat debugImg = kernel_left;
 
-		double avg_cost = 0;
+		
 
 		for (size_t idx = 0; idx < depthN; idx++){
 
@@ -213,7 +214,55 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 		
 		// std::cout  << "done " << std::endl;
 	}
+	#else
+	constexpr int HALF_SIZE = KERNEL_SIZE / 2;
+	CostMapType::iterator cost = cost_map.begin();
+	for (auto key = keys.begin(); key != keys.end();){
+		double avg_cost = 0;
+		for (size_t idx = 0; idx < depthN; idx++){
+			if(key->pt.y - HALF_SIZE < 0 || key->pt.y + HALF_SIZE >cv_leftImg_source.rows)
+				continue;
+			
+			cv::Rect roi;
+			cv::Mat letf_kernal(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
+			cv::Mat right_kernal(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
+			roi = cv::Rect(key->pt.x-HALF_SIZE, key->pt.y-HALF_SIZE,KERNEL_SIZE,KERNEL_SIZE);
+			for(int x = roi.x; x < roi.x + roi.width; x++)
+				for(int y = roi.y; y < roi.y + roi.height; y++)
+				{
+					Eigen::Vector3d point_caml, point_camr;
+					Eigen::Vector2d right_point;
+					caml->keypointToEuclidean(Eigen::Vector2d(x, y), point_caml);
+					point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
+					caml->euclideanToKeypoint(point_camr, right_point);
+					letf_kernal.at<unsigned char>(x-roi.x,y-roi.y) = cv_leftImg_source.at<unsigned char>(cv::Point(x,y));
+					if (right_point[0] < 0 || right_point[0] >= cv_rightImg_source.cols || right_point[1] < 0 || right_point[1] >= cv_rightImg_source.rows)
+						right_kernal.at<unsigned char>(x-roi.x,y-roi.y) = 0;
+					else
+					{
+						right_kernal.at<unsigned char>(x-roi.x,y-roi.y) = cv_rightImg_source.at<unsigned char>(cv::Point2f(right_point[0], right_point[1]));
+					}
+				} 
+			// Frobenius norm
+			(*cost)[idx] = cv::norm(right_kernal - letf_kernal) / (KERNEL_SIZE * KERNEL_SIZE);
+			avg_cost += (*cost)[idx];
+		}
+		auto sorted_idx = sort_indexes<double>((*cost));
+		key->response = depth_candidates[sorted_idx[0]];
+		avg_cost /= depthN;
 
+		if ((*cost)[sorted_idx[0]] > avg_cost * 0.8 || (*cost)[sorted_idx[0]] > 25)
+		{
+			key = keys.erase(key);
+			cost = cost_map.erase(cost);
+			num_removed++;
+		}
+		else
+		{
+			cost++;
+			key++;
+		}
+	}
 	
 	#endif
 

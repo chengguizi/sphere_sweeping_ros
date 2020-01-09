@@ -16,7 +16,7 @@
 
 #include <vector>
 
-#define USE_NAIVE
+// #define USE_NAIVE
 
 class CameraModel;
 
@@ -55,7 +55,7 @@ public:
     }
 
     static constexpr int KERNEL_SIZE = 9;
-    static constexpr int depthN = 60;
+    static constexpr int depthN = 50;
 
 
 private:
