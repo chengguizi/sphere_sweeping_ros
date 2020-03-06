@@ -166,7 +166,7 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 			// Perform basis transformation from left camera to right camera
 			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
 			Eigen::Vector2d right_point;
-			caml->euclideanToKeypoint(point_camr, right_point);
+			camr->euclideanToKeypoint(point_camr, right_point);
 
 			// std::cout << "right point: " << right_point.transpose() << std::endl;
 
@@ -234,7 +234,7 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 					Eigen::Vector2d right_point;
 					caml->keypointToEuclidean(Eigen::Vector2d(x, y), point_caml);
 					point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
-					caml->euclideanToKeypoint(point_camr, right_point);
+					camr->euclideanToKeypoint(point_camr, right_point);
 					letf_kernal.at<unsigned char>(x-roi.x,y-roi.y) = cv_leftImg_source.at<unsigned char>(cv::Point(x,y));
 					if (right_point[0] < 0 || right_point[0] >= cv_rightImg_source.cols || right_point[1] < 0 || right_point[1] >= cv_rightImg_source.rows)
 						right_kernal.at<unsigned char>(x-roi.x,y-roi.y) = 0;
@@ -244,14 +244,14 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 					}
 				} 
 			// Frobenius norm
-			(*cost)[idx] = cv::norm(right_kernal - letf_kernal) / (KERNEL_SIZE * KERNEL_SIZE);
+			(*cost)[idx] = cv::norm(right_kernal - letf_kernal, cv::NORM_L1) / (KERNEL_SIZE * KERNEL_SIZE);
 			avg_cost += (*cost)[idx];
 		}
 		auto sorted_idx = sort_indexes<double>((*cost));
 		key->response = depth_candidates[sorted_idx[0]];
 		avg_cost /= depthN;
 
-		if ((*cost)[sorted_idx[0]] > avg_cost * 0.8 || (*cost)[sorted_idx[0]] > 25)
+		if ((*cost)[sorted_idx[0]] > 0.9 * (*cost)[sorted_idx[1]])
 		{
 			key = keys.erase(key);
 			cost = cost_map.erase(cost);
@@ -270,15 +270,29 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 
 	// for ()
 
-	cv::Mat right_epipolar = cv_rightImg_source.clone();
+	cv::Mat right_epipolar;
+
+	cv::cvtColor(cv_rightImg_source, right_epipolar, CV_GRAY2BGR);
 
 	std::vector<cv::Point2f> pts;
 	pts.push_back(cv::Point2f(pr.imageCenterU, pr.imageCenterV));
-	// drawEpipolarCurve(right_epipolar, pts);
+	pts.push_back(cv::Point2f(pr.imageCenterU / 2, pr.imageCenterV / 2));
+	pts.push_back(cv::Point2f(pr.imageCenterU / 2, pr.imageCenterV ));
+	pts.push_back(cv::Point2f(pr.imageCenterU, pr.imageCenterV / 2));
+	pts.push_back(cv::Point2f(pr.imageCenterU * 0.5, pr.imageCenterV * 1.5));
+	pts.push_back(cv::Point2f(pr.imageCenterU * 1.5, pr.imageCenterV * 0.5));
+	drawEpipolarCurve(right_epipolar, pts);
+
+	for (auto pt : pts)
+	{
+		cv::circle(cv_leftImg_source, pt, 4, cv::Scalar(255,255,255), -1);
+	}
 
 	showDebugImage("Left", cv_leftImg_source);
 
-	// showDebugImage("Right Epi", right_epipolar);
+	
+
+	showDebugImage("Right Epi", right_epipolar, false);
 
 	std::cout << "removed " << num_removed << std::endl;
 	
@@ -343,6 +357,17 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 
 void SphereSweeping::drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::Point2f> pts)
 {
+	cv::Mat keysMat(cv::Size(1,depthN),CV_32FC1);
+	for (size_t idx = 0; idx < depthN; idx++)
+		keysMat.at<float>(idx) = 1.0 / depth_candidates[idx];
+
+	double min = 1.0/depth_candidates[0], max = 1.0/depth_candidates[depthN-1];
+	double k = 255 / (max-min);
+	keysMat.convertTo(keysMat,CV_8UC3, k , -k*min);
+		
+	cv::Mat colorCoding;
+	cv::applyColorMap(keysMat,colorCoding,cv::COLORMAP_HOT);
+
 	for (size_t idx = 0; idx < depthN; idx++)
 	{
 		for (auto& pt : pts)
@@ -351,13 +376,15 @@ void SphereSweeping::drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::P
 			caml->keypointToEuclidean(Eigen::Vector2d(pt.x, pt.y), point_caml);
 			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
 			Eigen::Vector2d right_point;
-			caml->euclideanToKeypoint(point_camr, right_point);
+			camr->euclideanToKeypoint(point_camr, right_point);
+
+			cv::circle(rightImg, cv::Point2f(right_point[0], right_point[1]), 1, colorCoding.at<cv::Vec3b>(cv::Point(0, idx)), -1);
 		}
 		
 	}
 }
 
-inline void SphereSweeping::showDebugImage(const std::string title, const cv::Mat img)
+inline void SphereSweeping::showDebugImage(const std::string title, const cv::Mat img, bool drawDepthRectangle)
 {
 	if (!visualisation)
 		return;
@@ -368,20 +395,25 @@ inline void SphereSweeping::showDebugImage(const std::string title, const cv::Ma
 	else 
 		outImg = img;
 
-	cv::Mat keysMat;
-	cv::Mat colorCoding;
-	for(auto & key:keys){
-		keysMat.push_back(1.0/key.response);
+	if (drawDepthRectangle)
+	{
+		cv::Mat keysMat;
+		cv::Mat colorCoding;
+		for(auto & key:keys){
+			keysMat.push_back(1.0/key.response);
+		}
+		double min = 1.0/depth_candidates[0], max = 1.0/depth_candidates[depthN-1];
+		double k = 255 / (max-min);
+		keysMat.convertTo(keysMat,CV_8UC3, k , -k*min);
+		cv::applyColorMap(keysMat,colorCoding,cv::COLORMAP_HOT);
+		int color_index = 0;
+		for(auto & key:keys){
+			rectangle(outImg, cv::Point(key.pt.x-KERNEL_SIZE/2,key.pt.y-KERNEL_SIZE/2), cv::Point(key.pt.x+KERNEL_SIZE/2,key.pt.y+KERNEL_SIZE/2), colorCoding.at<cv::Vec3b>(cv::Point(0, color_index)), -1);
+			color_index++;
+		}
+		
 	}
-	double min = 1.0/depth_candidates[0], max = 1.0/depth_candidates[depthN-1];
-	double k = 255 / (max-min);
-	keysMat.convertTo(keysMat,CV_8UC3, k , -k*min);
-	cv::applyColorMap(keysMat,colorCoding,cv::COLORMAP_HOT);
-	int color_index = 0;
-	for(auto & key:keys){
-		rectangle(outImg, cv::Point(key.pt.x-KERNEL_SIZE/2,key.pt.y-KERNEL_SIZE/2), cv::Point(key.pt.x+KERNEL_SIZE/2,key.pt.y+KERNEL_SIZE/2), colorCoding.at<cv::Vec3b>(cv::Point(0, color_index)), -1);
-		color_index++;
-	}
+	
 	cv::resize(outImg, outImg, cv::Size(), 0.5, 0.5);
 	cv::imshow(title, outImg);
 	cv::waitKey(1);

@@ -97,7 +97,7 @@ private:
 
     void drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::Point2f> pts);
 
-    void showDebugImage(const std::string title, const cv::Mat img);
+    void showDebugImage(const std::string title, const cv::Mat img, bool drawDepthRectangle = true);
 };
 
 #endif /* SPHERE_SWEEPING_HPP */
