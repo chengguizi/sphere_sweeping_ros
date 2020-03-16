@@ -18,7 +18,12 @@
 
 // #define USE_NAIVE
 
-class CameraModel;
+#include <basalt/camera/double_sphere_camera.hpp>
+
+// namespace basalt{
+//     class DoubleSphereCamera<>;
+// }
+
 
 
 // class DoubleSphereEpipolar{
@@ -77,7 +82,7 @@ private:
     // index is the same as keys.
     CostMapType cost_map;
 
-    CameraModel *caml, *camr; // camera model for both left and right cameras
+    basalt::DoubleSphereCamera<> *caml, *camr; // camera model for both left and right cameras
     
 
     DSParameters pl, pr;

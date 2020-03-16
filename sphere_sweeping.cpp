@@ -13,9 +13,7 @@
 
 #include <opencv2/features2d.hpp>
 
-#include <aslam/cameras/OmniProjection.hpp>
-#include <aslam/cameras/DoubleSphereProjection.hpp>
-#include <aslam/cameras/NoDistortion.hpp>
+// #include <basalt/camera/double_sphere_camera.hpp>
 
 #include <algorithm>
 #include <numeric> 
@@ -64,14 +62,14 @@ void imshow(const std::string title, const cv::Mat img, int wait = 0)
 }
 
 
-class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
+// class CameraModel : public aslam::cameras::DoubleSphereProjection<aslam::cameras::NoDistortion>{
 
-public:
-	CameraModel(double xi, double alpha, double focalLengthU, double focalLengthV,
-                 double imageCenterU, double imageCenterV, int resolutionU,
-                 int resolutionV) : 
-				 DoubleSphereProjection(xi,alpha,focalLengthU,focalLengthV,imageCenterU,imageCenterV,resolutionU,resolutionV){}
-};
+// public:
+// 	CameraModel(double xi, double alpha, double focalLengthU, double focalLengthV,
+//                  double imageCenterU, double imageCenterV, int resolutionU,
+//                  int resolutionV) : 
+// 				 DoubleSphereProjection(xi,alpha,focalLengthU,focalLengthV,imageCenterU,imageCenterV,resolutionU,resolutionV){}
+// };
 
 cv::Mat SphereSweeping::squareKernelImagePlane(const cv::Point2f pt, const cv::Mat img)
 {
@@ -170,7 +168,7 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 
 			// std::cout << "right point: " << right_point.transpose() << std::endl;
 
-			cv::Mat kernel_right = squareKernelImagePlane(cv::Point2f(right_point[0], right_point[1]), cv_rightImg_source);
+			cv::Mat kernel_right = squareKernelImagePlane(cv::Point2f(right_point(0), right_point(1)), cv_rightImg_source);
 
 			// Frobenius norm
 			(*cost)[idx] = cv::norm(kernel_right,kernel_left) / (KERNEL_SIZE * KERNEL_SIZE);
@@ -224,27 +222,30 @@ void SphereSweeping::imageCallback(	const sensor_msgs::ImageConstPtr l_image_msg
 				continue;
 			
 			cv::Rect roi;
-			cv::Mat letf_kernal(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
-			cv::Mat right_kernal(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
+			cv::Mat left_kernel(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
+			cv::Mat right_kernel(cv::Size(KERNEL_SIZE,KERNEL_SIZE),CV_8UC1);
 			roi = cv::Rect(key->pt.x-HALF_SIZE, key->pt.y-HALF_SIZE,KERNEL_SIZE,KERNEL_SIZE);
 			for(int x = roi.x; x < roi.x + roi.width; x++)
 				for(int y = roi.y; y < roi.y + roi.height; y++)
 				{
-					Eigen::Vector3d point_caml, point_camr;
+					Eigen::Vector4d point_caml, point_camr;
 					Eigen::Vector2d right_point;
-					caml->keypointToEuclidean(Eigen::Vector2d(x, y), point_caml);
-					point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
-					camr->euclideanToKeypoint(point_camr, right_point);
-					letf_kernal.at<unsigned char>(x-roi.x,y-roi.y) = cv_leftImg_source.at<unsigned char>(cv::Point(x,y));
-					if (right_point[0] < 0 || right_point[0] >= cv_rightImg_source.cols || right_point[1] < 0 || right_point[1] >= cv_rightImg_source.rows)
-						right_kernal.at<unsigned char>(x-roi.x,y-roi.y) = 0;
+					// caml->keypointToEuclidean(Eigen::Vector2d(x, y), point_caml);
+					caml->unproject(Eigen::Vector2d(x, y), point_caml);
+					point_caml(3) = 1./depth_candidates[idx]; // reset infinity point to finite
+					point_camr = pr.T_cn_cnm1 * (point_caml);
+					// camr->euclideanToKeypoint(point_camr, right_point);
+					camr->project(point_camr, right_point);
+					left_kernel.at<unsigned char>(x-roi.x,y-roi.y) = cv_leftImg_source.at<unsigned char>(cv::Point(x,y));
+					if (right_point(0) < 0 || right_point(0) >= cv_rightImg_source.cols || right_point(1) < 0 || right_point(1) >= cv_rightImg_source.rows)
+						right_kernel.at<unsigned char>(x-roi.x,y-roi.y) = 0;
 					else
 					{
-						right_kernal.at<unsigned char>(x-roi.x,y-roi.y) = cv_rightImg_source.at<unsigned char>(cv::Point2f(right_point[0], right_point[1]));
+						right_kernel.at<unsigned char>(x-roi.x,y-roi.y) = cv_rightImg_source.at<unsigned char>(cv::Point2f(right_point(0), right_point(1)));
 					}
 				} 
 			// Frobenius norm
-			(*cost)[idx] = cv::norm(right_kernal - letf_kernal, cv::NORM_L1) / (KERNEL_SIZE * KERNEL_SIZE);
+			(*cost)[idx] = cv::norm(right_kernel - left_kernel, cv::NORM_L1) / (KERNEL_SIZE * KERNEL_SIZE);
 			avg_cost += (*cost)[idx];
 		}
 		auto sorted_idx = sort_indexes<double>((*cost));
@@ -339,17 +340,31 @@ void SphereSweeping::initialiseDepthCandidates(const sensor_msgs::CameraInfoCons
 	cameraInfo2DSParam(l_info_msg, pl);
 	cameraInfo2DSParam(r_info_msg, pr);
 
-	caml = new CameraModel(pl.xi, pl.alpha, pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.resolutionU, pl.resolutionV);
-	camr = new CameraModel(pr.xi, pr.alpha, pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.resolutionU, pr.resolutionV);
+	// p	vector of intrinsic parameters [fx, fy, cx, cy, xi, alpha]
+	Eigen::VectorXd paraml(6), paramr(6);
+	paraml <<  pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.xi, pl.alpha;
+	paramr << pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.xi, pr.alpha;
+	std::cout << "Initialise basalt::DoubleSphereCamera<>" << std::endl;
+	caml = new basalt::DoubleSphereCamera<double>(paraml);
+	camr = new basalt::DoubleSphereCamera<double>(paramr);
+
+
+	// caml = new CameraModel(pl.xi, pl.alpha, pl.focalLengthU, pl.focalLengthV, pl.imageCenterU, pl.imageCenterV, pl.resolutionU, pl.resolutionV);
+	// camr = new CameraModel(pr.xi, pr.alpha, pr.focalLengthU, pr.focalLengthV, pr.imageCenterU, pr.imageCenterV, pr.resolutionU, pr.resolutionV);
 	// Initialise all depth candidates, based on unit pixel disparity between adjacent spheres
+	std::cout << "Initialise depth_candidates" << std::endl;
 	int N = depth_candidates.size();
 	for(int i = 1; i <= N; i++){
 		Eigen::Vector2d keyPoint(pr.imageCenterU - i ,pr.imageCenterV);
-		Eigen::Vector3d outPoint;
-		camr->keypointToEuclidean(keyPoint,outPoint);
+		Eigen::Vector4d outPoint;
+		// camr->keypointToEuclidean(keyPoint,outPoint);
+		std::cout << "unprojecting" << std::endl;
+		camr->unproject(keyPoint, outPoint);
+		std::cout << "unprojected" << std::endl;
 		depth_candidates[i-1] = outPoint[2]/outPoint[0] * pr.T_cn_cnm1(0,3);
 		std::cout<<"depth"<<i<<": "<< depth_candidates[i-1]<< std::endl;
 	}
+	std::cout << "done" << std::endl;
 
 	cv::waitKey(1);
 	initialised = true;
@@ -372,13 +387,17 @@ void SphereSweeping::drawEpipolarCurve(cv::Mat rightImg, const std::vector<cv::P
 	{
 		for (auto& pt : pts)
 		{
-			Eigen::Vector3d point_caml, point_camr;
-			caml->keypointToEuclidean(Eigen::Vector2d(pt.x, pt.y), point_caml);
-			point_camr = pr.T_cn_cnm1 * (point_caml * depth_candidates[idx]);
+			Eigen::Vector4d point_caml, point_camr;
+			caml->unproject(Eigen::Vector2d(pt.x, pt.y), point_caml);
+			point_caml(3) = 1./depth_candidates[idx]; // reset infinity point to finite
+			// caml->keypointToEuclidean(Eigen::Vector2d(pt.x, pt.y), point_caml);
+			point_camr = pr.T_cn_cnm1 * (point_caml);
 			Eigen::Vector2d right_point;
-			camr->euclideanToKeypoint(point_camr, right_point);
+			camr->project(point_camr, right_point);
 
-			cv::circle(rightImg, cv::Point2f(right_point[0], right_point[1]), 1, colorCoding.at<cv::Vec3b>(cv::Point(0, idx)), -1);
+			// camr->euclideanToKeypoint(point_camr, right_point);
+
+			cv::circle(rightImg, cv::Point2f(right_point(0), right_point(1)), 1, colorCoding.at<cv::Vec3b>(cv::Point(0, idx)), -1);
 		}
 		
 	}

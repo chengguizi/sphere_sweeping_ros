@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(sphere_sweeping_ros)
 
 # enable C++11 standard (current directory scope)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # configure build types and build c-flags
@@ -27,16 +27,6 @@ find_package(catkin REQUIRED COMPONENTS
     image_transport
     message_filters
     cv_bridge
-
-    aslam_cameras
-    sm_eigen
-    sm_common
-    sm_property_tree
-    sm_boost
-    sm_kinematics
-    sm_opencv
-    aslam_time
-    sm_logging
 )
 
 find_package(OpenCV REQUIRED)
@@ -76,7 +66,7 @@ target_include_directories( sphere_sweeping_ros
     PRIVATE
       include
       ${catkin_INCLUDE_DIRS}
-      ${Eigen_INCLUDE_DIRS}
+      ${EIGEN3_INCLUDE_DIR}
   )
   
 
